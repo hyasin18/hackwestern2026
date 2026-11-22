@@ -76,6 +76,7 @@ class VoiceSystem:
         self.yellow_at, self.yellow_reset = c.float("YELLOW_AT"), c.float("YELLOW_RESET")
         self.yellow_cd, self.red_cd = c.float("YELLOW_COOLDOWN_S"), c.float("RED_COOLDOWN_S")
         self.yellow_wait = c.float("YELLOW_MAX_WAIT_S")
+        self.sound_delay = max(0.0, c.float("SOUND_DELAY_S"))
         self.yellow_armed = True
         self.last_yellow = self.last_red = -1e9
         self.red_requested = 0.0       # wall-clock time the last red message was asked for
@@ -148,6 +149,16 @@ class VoiceSystem:
             return True
         return time.time() - self.red_requested < 1.0
 
+    def playing_zone(self):
+        """"red" / "yellow" while that message is waiting or playing, so the
+        light can stay the same colour as the voice."""
+        if self.red_playing():
+            return "red"
+        p = self.audio.playing()
+        if p and p[1] == am.PRIORITY_YELLOW:
+            return "yellow"
+        return None
+
     def speaking(self):
         p = self.audio.playing()
         return p[0] if p else None
@@ -182,9 +193,18 @@ class VoiceSystem:
             self._note("red: staying quiet (cooldown, %d s left)" % left)
             return
         self.last_red = now
-        self.red_requested = time.time()
+        self.red_requested = time.time() + self.sound_delay
         # Checking the recording reads it from the SD card - do that off the main loop.
-        threading.Thread(target=self._play_red, args=("red",), daemon=True).start()
+        threading.Thread(target=self._red_later, daemon=True).start()
+
+    def _red_later(self):
+        """The light turns red first; the message follows SOUND_DELAY_S later."""
+        time.sleep(self.sound_delay)
+        with self.lock:
+            if self.breathing:
+                self._note("red: skipped, breathing started before the message")
+                return
+        self._play_red("red")
 
     def _play_red(self, why):
         for label, path, csv in (("parent recording", self.parent_path(), "say_red"),
@@ -214,7 +234,8 @@ class VoiceSystem:
         self.yellow_gen += 1
         gen = self.yellow_gen
         self._note("yellow: asking Gemini for a calming suggestion")
-        threading.Thread(target=self._yellow_work, args=(gen, force), daemon=True).start()
+        threading.Thread(target=self._yellow_work, args=(gen, force, time.time()),
+                         daemon=True).start()
 
     def _still_wanted(self, gen, force):
         with self.lock:
@@ -222,7 +243,7 @@ class VoiceSystem:
                 return False
             return force or self.stress >= self.yellow_reset
 
-    def _yellow_work(self, gen, force):
+    def _yellow_work(self, gen, force, t0=None):
         text, src = self._get_tip()
         if not self._still_wanted(gen, force):
             self._note("yellow: message no longer needed, dropped")
@@ -239,6 +260,8 @@ class VoiceSystem:
             self._note("yellow: no suggestion from Gemini (%s) -> fallback recording" % src)
         if not path:
             path, how = audio_file("yellow_fallback"), "fallback recording"
+        if t0 is not None and not force:              # light first, sound a bit later
+            time.sleep(max(0.0, self.sound_delay - (time.time() - t0)))
         if not self._still_wanted(gen, force):
             self._note("yellow: message no longer needed, dropped")
             return

@@ -65,12 +65,12 @@ VOICE_IN_MODES=kid,focus
 # AND the cooldown has passed.
 YELLOW_AT=40
 YELLOW_RESET=25
-YELLOW_COOLDOWN_S=90
+YELLOW_COOLDOWN_S=15
 # A yellow message that can't start within this many seconds is dropped.
 YELLOW_MAX_WAIT_S=15
 
 # Red fires when the cube "turns red" (stress crosses 85), at most this often.
-RED_COOLDOWN_S=120
+RED_COOLDOWN_S=15
 
 # Spoken "Breathe in / Hold / Breathe out" during the breathing exercise.
 BREATHING_VOICE=true

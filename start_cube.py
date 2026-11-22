@@ -9,8 +9,7 @@ It does three jobs in this one window:
   2. laptop speaker <- plays the cube's voice            (like laptop_speaker.py)
   3. logs in to the Pi and starts calm_cube.py there   (asks for the password: qnxuser)
 
-Options:  python start_cube.py --mode focus
-          python start_cube.py --pi 172.23.42.90 --device 3   (pick a mic, see --list)
+Options:  python start_cube.py --pi 172.23.42.90 --device 3   (pick a mic, see --list)
 Ctrl+C stops everything.
 Needs: python -m pip install sounddevice numpy
 """
@@ -126,7 +125,7 @@ def my_ip_towards(pi):
 def main():
     ap = argparse.ArgumentParser(description="Run the whole CoCube from the laptop")
     ap.add_argument("--pi", default="172.23.42.90", help="the Pi's IP address")
-    ap.add_argument("--mode", default="kid", choices=["kid", "focus"])
+    ap.add_argument("--mode", default="kid", choices=["kid"])
     ap.add_argument("--device", type=int, help="microphone number (see --list)")
     ap.add_argument("--list", action="store_true", help="list microphones")
     ap.add_argument("--folder", default="~/hackwestern2026", help="folder on the Pi")

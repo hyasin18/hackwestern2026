@@ -323,6 +323,8 @@ def test_fallback(args):
 def test_cooldown(args):
     print("\nTEST 6 - COOLDOWN (simulated 7 minutes, runs in a few seconds)")
     audio, cfg = manager(args.audio_player or "sim", speed=200)
+    cfg.set("YELLOW_COOLDOWN_S", "90")      # timeline below assumes long cooldowns
+    cfg.set("RED_COOLDOWN_S", "120")
     calls = {"tip": 0, "tts": 0}
 
     def fake_tip(why, done):
@@ -599,7 +601,7 @@ def test_existing(args):
         check(status()["break_alert"], "long press sends the break request to the dashboard")
         get("/ack")
         time.sleep(0.4)
-        check(not status()["break_alert"], "dashboard 'I'm coming' clears the break request")
+        check(not status()["break_alert"], "/ack clears the break request")
         reds = status()["reds"]
         key("2")
         time.sleep(1.0)
@@ -609,7 +611,7 @@ def test_existing(args):
               (vs["audio"]["playing_now"] or "").startswith("red"), "red message played")
         get("/mode?m=focus")
         time.sleep(0.3)
-        check(status()["mode"] == "focus", "mode switch works")
+        check(status()["mode"] == "kid", "unknown mode is ignored")
         code_, body = get("/report/summary.csv")
         check(code_ == 200 and b"Date" in body, "CSV report downloads")
         time.sleep(1.2)
@@ -645,6 +647,9 @@ def main(argv=None):
     ap.add_argument("--cycles", type=int, default=1, help="breathing cycles for Test 2")
     args = ap.parse_args(argv)
     names = AUTOMATIC if args.test == "all" else [args.test]
+    if all(n in AUTOMATIC for n in names):
+        # These tests assert immediately, so skip the playback delay
+        os.environ.setdefault("SOUND_DELAY_S", "0")
     for n in names:
         TESTS[n](args)
     passed = sum(1 for ok, _ in RESULTS if ok)

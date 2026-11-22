@@ -37,9 +37,10 @@ DEFAULTS = {
     "VOICE_IN_MODES": "kid,focus",
     "YELLOW_AT": "40",               # stress that counts as "turned yellow"
     "YELLOW_RESET": "25",            # must fall below this before yellow can repeat
-    "YELLOW_COOLDOWN_S": "90",
+    "YELLOW_COOLDOWN_S": "15",
     "YELLOW_MAX_WAIT_S": "15",       # drop a yellow message that is this late
-    "RED_COOLDOWN_S": "120",
+    "RED_COOLDOWN_S": "15",
+    "SOUND_DELAY_S": "2",            # light changes first, sound follows this much later
     "BREATHING_VOICE": "true",
     "BREATHING_CUE_LEAD_S": "0.15",  # start cues a little early to hide start-up lag
     "AUTO_BREATHE_WAITS_FOR_VOICE": "true",

@@ -62,13 +62,17 @@
   <section>
     <h2>Add or replace your message</h2>
     <ol class="muted">
-      <li>Record 5–20 seconds on your phone (Voice Memos or any recorder), e.g.
+      <li>Record 5–20 seconds on your phone (Voice Memos, any recorder, or a video), e.g.
         <em>“Hey sweetheart, I'm here. Let's take a little break.”</em></li>
-      <li>Choose the recording below. It's turned into a file the cube can play.</li>
+      <li>Choose the recording or video below. Only the sound is kept, turned into a file the cube can play.</li>
       <li>Listen, then tap <b>Save on the cube</b>.</li>
     </ol>
-    <label class="btn">Choose recording
-      <input type="file" id="file" accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg,.webm,.caf"></label>
+    <label class="btn">Choose recording or video
+      <input type="file" id="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.aac,.ogg,.webm,.caf,.mov,.mp4,.m4v"></label>
+    <div id="videoBox" hidden>
+      <p class="muted" id="videoInfo"></p>
+      <button class="btn" id="videoBtn" onclick="useVideo()">Get the sound from this video</button>
+    </div>
     <div id="previewBox" hidden>
       <audio id="preview" controls></audio>
       <p class="muted" id="prepInfo"></p>
@@ -126,18 +130,88 @@ function decode(ctx, buf) {
   });
 }
 
-async function prepare(file) {
-  const AC = window.AudioContext || window.webkitAudioContext;
+const AC = window.AudioContext || window.webkitAudioContext;
+const isVideo = f => /^video\//.test(f.type) || /\.(mov|mp4|m4v|3gp)$/i.test(f.name);
+let pendingVideo = null;
+
+// Decode the whole file in one go.
+async function decodeToMono(file) {
   if (!AC) throw new Error("This browser can't convert audio. Try Chrome or Safari.");
   const ctx = new AC();
-  const audio = await decode(ctx, await file.arrayBuffer());
-  if (ctx.close) ctx.close();
+  let audio;
+  try { audio = await decode(ctx, await file.arrayBuffer()); }
+  finally { if (ctx.close) ctx.close(); }
   // mix to mono
   const n = audio.length, mono = new Float32Array(n);
   for (let c = 0; c < audio.numberOfChannels; c++) {
     const d = audio.getChannelData(c);
     for (let i = 0; i < n; i++) mono[i] += d[i] / audio.numberOfChannels;
   }
+  return {mono, rate: audio.sampleRate};
+}
+
+// Fallback for files decodeAudioData can't handle (e.g. iPhone .mov): play the
+// media muted and capture its audio in real time. Must be started by a tap.
+function useVideo() {
+  const f = pendingVideo;
+  if (!f || !AC) return;
+  $("videoBtn").disabled = true;
+  const ctx = new AC(), url = URL.createObjectURL(f);
+  const el = document.createElement("video");
+  el.playsInline = true; el.setAttribute("playsinline", ""); el.preload = "auto"; el.src = url;
+  const src = ctx.createMediaElementSource(el);
+  const proc = ctx.createScriptProcessor(4096, 1, 1);   // mono input
+  const mute = ctx.createGain(); mute.gain.value = 0;    // silent output
+  src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
+  const chunks = []; let got = 0, cleaned = false, timer = 0;
+  proc.onaudioprocess = ev => {
+    if (el.paused || el.ended) return;
+    const d = ev.inputBuffer.getChannelData(0);
+    chunks.push(new Float32Array(d)); got += d.length;
+  };
+  const cleanup = () => {
+    if (cleaned) return; cleaned = true; clearInterval(timer);
+    try { src.disconnect(); proc.disconnect(); mute.disconnect(); } catch (e) {}
+    el.pause(); el.removeAttribute("src"); el.load(); URL.revokeObjectURL(url);
+    if (ctx.close) ctx.close();
+  };
+  if (ctx.resume) ctx.resume();
+  const started = el.play();
+  say("Reading the sound… keep this page open.");
+  new Promise((ok, fail) => {
+    el.onerror = () => fail(new Error("This video can't be played here. Try a voice memo instead."));
+    el.onended = ok;
+    timer = setInterval(() => {
+      const lim = Math.min(isFinite(el.duration) ? el.duration : MAX_S, MAX_S + 0.5);
+      say("Reading the sound… " + Math.floor(el.currentTime) + " of " + Math.ceil(lim) +
+          " s. Keep this page open.");
+      if (el.currentTime >= lim) ok();
+    }, 200);
+    if (started && started.catch)
+      started.catch(err => fail(new Error("The video didn't start. Tap the button again. (" + err.message + ")")));
+  }).then(() => {
+    const rate = ctx.sampleRate, mono = new Float32Array(got);
+    let o = 0; for (const c of chunks) { mono.set(c, o); o += c.length; }
+    cleanup();
+    if (!got) throw new Error("No sound came out of this video. Try a voice memo instead.");
+    return finish(mono, rate);
+  }).then(r => { $("videoBox").hidden = true; pendingVideo = null; showResult(r); })
+    .catch(err => { cleanup(); say(err.message || "This video couldn't be read. Try a voice memo instead.", "err"); })
+    .finally(() => { $("videoBtn").disabled = false; });
+}
+
+function offerVideo(f) {
+  pendingVideo = f;
+  $("videoInfo").textContent = "To use this video, the page plays it once (silently) to pick up the sound. " +
+    "It takes as long as the video, up to " + MAX_S + " seconds.";
+  $("videoBox").hidden = false;
+  say("");
+}
+
+// Trim, resample, even out the volume, and build the WAV the cube plays.
+async function finish(mono, rate) {
+  const n = mono.length;
+  const audio = {sampleRate: rate};
   // trim quiet start/end, keep a little padding
   const thr = 0.015, pad = Math.round(0.15 * audio.sampleRate);
   let a = 0, b = n - 1;
@@ -182,17 +256,30 @@ function wav(pcm, rate) {
   return new Blob([h.buffer, pcm.buffer], {type: "audio/wav"});
 }
 
+function showResult(r) {
+  wavBlob = r.blob;
+  $("preview").src = URL.createObjectURL(wavBlob);
+  $("prepInfo").textContent = r.seconds.toFixed(1) + " seconds" +
+    (r.tooLong ? " (only the first " + MAX_S + " seconds are kept)" : "") + ". Quiet start and end trimmed.";
+  $("previewBox").hidden = false; say("");
+}
+
 $("file").onchange = async e => {
   const f = e.target.files[0]; e.target.value = "";
   if (!f) return;
-  $("previewBox").hidden = true; say("Getting your recording ready…");
+  $("previewBox").hidden = true; $("videoBox").hidden = true; pendingVideo = null;
+  // Safari's decoder can hang on video files, so always capture those.
+  if (isVideo(f)) return offerVideo(f);
+  say("Getting your recording ready…");
+  let m;
   try {
-    const r = await prepare(f);
-    wavBlob = r.blob;
-    $("preview").src = URL.createObjectURL(wavBlob);
-    $("prepInfo").textContent = r.seconds.toFixed(1) + " seconds" +
-      (r.tooLong ? " (only the first " + MAX_S + " seconds are kept)" : "") + ". Quiet start and end trimmed.";
-    $("previewBox").hidden = false; say("");
+    m = await Promise.race([decodeToMono(f), new Promise((_, no) =>
+      setTimeout(() => no(new Error("timeout")), 15000))]);
+  } catch (err) {
+    return offerVideo(f);
+  }
+  try {
+    showResult(await finish(m.mono, m.rate));
   } catch (err) {
     say((err && err.message) || "This recording couldn't be opened. Try another one.", "err");
   }

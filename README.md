@@ -7,16 +7,15 @@ Calm Cube is a sensory-support device designed primarily for autistic children w
 ### How It Works
 
 - **Noise Monitoring:** A microphone measures loudness only (never words). QNX's USB audio driver can't record from USB mics yet, so the laptop's mic measures the levels (`laptop_mic.py`) and sends just the numbers to the Pi over Wi-Fi.
-- **Responsive Lighting:** Red, green and yellow LEDs mix green → yellow → orange → red as noise levels increase.
+- **Responsive Lighting:** Green, yellow and red LEDs, one at a time, step from green → yellow → red as noise levels increase. The light changes first and the voice message follows two seconds later.
 - **Guided Breathing:** A short button press starts a one-minute breathing exercise, with the lights gradually brightening and fading to guide breathing.
-- **Break Requests:** Holding the button for two seconds sends an "I need a break" request to a connected parent or teacher dashboard.
+- **Break Requests:** Holding the button for two seconds sends an "I need a break" request to a connected parent or teacher dashboard. The cube shows yellow for 10 seconds, then returns to normal.
 - **AI-Powered Calming Tips:** When high-noise events are detected, Google Gemini generates calming suggestions using numerical summaries rather than audio recordings.
 - **Live Dashboard:** A web dashboard displays noise events, activity history, and calming suggestions.
 
 ### Modes
 
-- **Kid Mode:** Soft, predictable lighting with no flashing and automatic breathing support when noise remains high.
-- **Focus Mode:** More sensitive noise monitoring.
+- **Kid Mode:** Soft, predictable lighting with no flashing, designed with autistic kids in mind. Breathing only starts when the button is pressed.
 - **Gamer Mode:** A playful noise-responsive rage meter with flashing lighting effects.
 
 ### Technology Stack

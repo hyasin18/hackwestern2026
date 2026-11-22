@@ -74,8 +74,8 @@ upload the parent's recording (its "Listen" button is just a preview for the par
   3. The QSTI has Python 3 but **no pip**, so everything here is standard library only.
   4. The cube's own voice would be picked up by its mic and raise the stress meter.
      Handled: the mic is ignored while the cube talks (`MUTE_MIC_WHILE_SPEAKING`).
-* **Gamer mode**: the README mentions it, but `calm_cube.py` and the dashboard only have
-  **kid** and **focus**. I did not invent it — tell me if a teammate has that code.
+* **Modes**: `calm_cube.py` has a single mode, **kid**. Gamer mode from the README is not
+  implemented yet.
 
 ---
 
@@ -221,7 +221,6 @@ If the cube needs internet for Gemini/ElevenLabs, it must be on Wi-Fi. QNX's cer
 ### Step 5 — Run
 ```bash
 python3 calm_cube.py                  # normal (kid mode)
-python3 calm_cube.py --mode focus
 python3 calm_cube.py --sim            # no mic/LEDs; keys: 1 yellow, 2 red, 0 calm, p, l, q
 python3 calm_cube.py --sim --audio-player sim   # also no sound (laptop logic test)
 python3 calm_cube.py --no-voice       # exactly the old silent behaviour
@@ -268,9 +267,11 @@ with `/voice_upload` (it has a PIN box).
 ## 7. Behaviour details (so you can explain them to judges)
 
 * **Transitions, not continuous:** yellow fires once on the way *up* past 40 and can't fire
-  again until stress drops below 25 **and** 90 s have passed. Red reuses the existing
-  "turned red" (85 up / 60 reset) plus a 120 s cooldown. Staying loud = one Gemini request,
+  again until stress drops below 25 **and** 15 s have passed. Red reuses the existing
+  "turned red" (85 up / 60 reset) plus a 15 s cooldown. Staying loud = one Gemini request,
   one ElevenLabs request, one red message.
+* **Light first, then sound:** the LED switches instantly and the message starts
+  `SOUND_DELAY_S` (2 s) later. The light keeps the message's colour while it plays.
 * **No overlap:** one playback thread. Priority breathing 30 > red 20 > yellow 10.
   Higher stops lower immediately; lower waits briefly or is dropped.
 * **Breathing:** short press stops any AI/red message, then cues play at each light phase.
@@ -400,9 +401,9 @@ python3 test_voice.py existing        # starts calm_cube.py --sim on port 18080,
 python3 test_voice.py all             # every automatic test (about 1 minute)
 ```
 Expected: `17 of 17 checks passed.` (dashboard loads, /status fields, short press/long press,
-"I'm coming", red count, mode switch, CSV report and log, no Python errors).
+break clear, red count, CSV report and log, no Python errors).
 Then on the cube by hand: `--test-mic`, `--test-leds`, normal run, dashboard on a phone,
-Gentle/Focus switch, break request, "Show another" tip, CSV downloads.
+break request, "Show another" tip, CSV downloads.
 
 Handy while testing: `http://<cube-ip>:8080/voice_status` shows the player, last results,
 cooldowns, the parent recording, problems with any sound file, and recent voice events.
@@ -459,4 +460,3 @@ cooldowns, the parent recording, problems with any sound file, and recent voice 
 | Dashboard upload says "didn't work" | It was probably m4a/mp3 — use `/voice_upload` |
 | Cube's own voice raises the stress | Keep `MUTE_MIC_WHILE_SPEAKING=true`; raise `MUTE_TAIL_S` to `0.8` |
 | Breathing voice late | Raise `BREATHING_CUE_LEAD_S` |
-| Want it silent in Focus mode | `VOICE_IN_MODES=kid` |

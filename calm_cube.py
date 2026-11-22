@@ -11,7 +11,6 @@ hardware (LEDs are drawn in the terminal) so you can develop in parallel.
   python3 calm_cube.py --test-mic          # step 1: is the mic working?
   python3 calm_cube.py --test-leds         # step 2: are the LEDs wired right?
   python3 calm_cube.py                     # run the cube (kid mode)
-  python3 calm_cube.py --mode focus        # more sensitive, for studying
   python3 calm_cube.py --net               # mic levels from laptop_mic.py (QNX can't record USB mics)
   python3 calm_cube.py --sim               # no mic/LEDs: type b / y / p / l
   python3 calm_cube.py --test-speaker      # step 3: does the cube's speaker work?
@@ -79,11 +78,6 @@ MODES = {
                 decay=5, fade_s=1.5, flash=False, auto_breathe=False,
                 palette=[(0, (0, 255, 0)), (40, (255, 255, 0)),
                          (70, (255, 130, 0)), (100, (255, 0, 0))]),
-    # Nudges you sooner when the room gets noisy.
-    "focus": dict(loud_db=10, bang_db=18, yell_rate=12, bang_add=8,
-                  decay=4, fade_s=1.0, flash=False, auto_breathe=False,
-                  palette=[(0, (0, 255, 0)), (50, (255, 255, 0)),
-                           (100, (255, 0, 0))]),
 }
 
 BREATHE_IN_S, BREATHE_HOLD_S, BREATHE_OUT_S = 4.0, 2.0, 6.0
@@ -91,6 +85,7 @@ BREATHE_CYCLES = 5                     # 5 x 12 s = 1 minute
 BREATHE_COLOR = (40, 90, 255) if THIRD_LED == "blue" else (0, 255, 0)
 BREAK_COLOR = (150, 60, 255) if THIRD_LED == "blue" else (255, 255, 0)
 LONG_PRESS_S = 2.0
+BREAK_SHOW_S = 10.0    # break light (yellow) clears by itself after this
 AUTO_BREATHE_STRESS, AUTO_BREATHE_HOLD_S = 80, 4.0
 
 # =============================================================================
@@ -627,11 +622,9 @@ font-size:1.3em;margin:12px 0}button{font-size:1em;padding:10px 16px;
 margin:4px;border-radius:8px;border:0}.bar{height:14px;background:#333;
 border-radius:7px;overflow:hidden}.bar div{height:100%;background:#f80}
 </style></head><body><h2>CoCube</h2><div id=alert>I need a break
-<span id=at></span><br><button onclick="go('/ack')">OK, coming</button></div>
+<span id=at></span></div>
 <div id=c></div><div class=bar><div id=s></div></div><p id=t></p>
-<p><button onclick="go('/mode?m=kid')">Kid</button>
-<button onclick="go('/mode?m=focus')">Focus</button>
-<button onclick="go('/breathe')">Start breathing</button></p>
+<p><button onclick="go('/breathe')">Start breathing</button></p>
 <p>Times turned red: <b id=r>0</b></p>
 <script>
 function go(u){fetch(u).then(tick)}
@@ -773,6 +766,16 @@ def run(args):
     if not use_gpio:
         print("No GPIO found - showing the cube colour in this terminal.")
     leds = Leds(use_gpio)
+    leds.set((0, 0, 0))
+    # Turn the LEDs off on SIGTERM/SIGHUP too (e.g. the ssh session drops),
+    # not only on Ctrl+C.
+    import signal
+
+    def _stop(*_):
+        raise KeyboardInterrupt
+    for name in ("SIGTERM", "SIGHUP"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), _stop)
     button = Button(use_gpio)
     det = Detector(args.mode)
     STATE["mode"] = args.mode
@@ -903,6 +906,9 @@ def run(args):
                         add_event("reset", "Counts reset")
                     if a != "stop_breathe":
                         log_events.append(a)
+                if break_alert and tick - break_alert >= BREAK_SHOW_S:
+                    break_alert = None
+                    add_event("ack", "Break alert finished")
                 log_events += events + (["red"] if turned_red else [])
                 if not det.calibrating:
                     STATE["zone_s"][zone_of(det.stress)] += dt
@@ -928,16 +934,16 @@ def run(args):
 
             # 6. Pick the target colour
             if det.calibrating:
-                target, fade = (40, 40, 40), 0.3
-            elif break_alert:
-                pulse = 0.6 + 0.4 * math.sin(tick * 2)
-                target, fade = [c * pulse for c in BREAK_COLOR], 0.1
+                target, fade = (0, 255, 0), 0.3
+            elif break_alert and det.stress < RED_FROM:    # red overrides the break light
+                target, fade = BREAK_COLOR, 0.1
             elif breathe_t0:
                 b = breathe_brightness(tick - breathe_t0)
                 if b is None:
                     breathe_t0 = None
                     det.stress *= 0.5          # breathing helped
-                    target, fade = (0, 0, 0), 0.5
+                    target = palette_color(det.cfg["palette"], det.stress)
+                    fade = 0.5
                     if VOICE:
                         VOICE.breathing_stopped(finished=True)
                 else:
@@ -949,7 +955,14 @@ def run(args):
                 target, fade = (255, 255, 255), 0.0
             else:
                 target = palette_color(det.cfg["palette"], det.stress)
-                fade = det.cfg["fade_s"]
+                # Switch instantly so the light leads the sound by SOUND_DELAY_S
+                fade = 0.0 if ONE_LIGHT else det.cfg["fade_s"]
+                # Hold the colour while its voice message is pending or playing
+                zone = VOICE.playing_zone() if (VOICE and ONE_LIGHT) else None
+                if zone == "red":
+                    target = (255, 0, 0)
+                elif zone == "yellow" and det.stress < GREEN_BELOW:
+                    target = (255, 255, 0)
 
             # 7. Smooth fade toward the target and show it
             k = 1.0 if fade <= 0 else min(1.0, dt / fade)
@@ -960,7 +973,7 @@ def run(args):
                 STATE.update(stress=round(det.stress, 1),
                              level_db=round(det.level, 1),
                              floor_db=det.floor and round(det.floor, 1),
-                             color=[int(c) for c in color],
+                             color=list(leds.shown),   # exactly what the LED shows
                              zone=zone_of(det.stress),
                              calibrating=det.calibrating,
                              breathing=bool(breathe_t0),
