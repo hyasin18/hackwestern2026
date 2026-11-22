@@ -1,0 +1,95 @@
+# =============================================================================
+# CoCube voice settings - EXAMPLE
+#
+# 1. Copy this file to  config.local   (same folder as calm_cube.py)
+#        cp config.example config.local
+# 2. Put your real ElevenLabs key in config.local (NOT in this file).
+# 3. config.local is listed in .gitignore, so it never goes to GitHub.
+#
+# Any setting can also be given as an environment variable with the same
+# name, e.g.   export ELEVENLABS_API_KEY=sk_...   (that wins over this file)
+# Lines starting with # are comments. Leave a value blank to use the default.
+# =============================================================================
+
+# ---- ElevenLabs (the YELLOW message) ----------------------------------------
+# From https://elevenlabs.io -> your profile -> API Keys. Keep it secret.
+ELEVENLABS_API_KEY=
+
+# Voice to use. In ElevenLabs open "Voices", pick a calm voice, copy its ID.
+ELEVENLABS_VOICE_ID=JBFqnCBsd6RMkjVDRZzb
+
+# Flash v2.5 = ElevenLabs' low-latency model.
+ELEVENLABS_MODEL_ID=eleven_flash_v2_5
+
+# The cube asks for raw 16-bit PCM at this rate and saves it as WAV.
+# 22050 works on all ElevenLabs plans (44100 needs a paid tier).
+ELEVENLABS_SAMPLE_RATE=22050
+
+# Speaking speed, 0.7 (slow) to 1.2 (fast). Slightly slow sounds calmer.
+ELEVENLABS_SPEED=0.9
+ELEVENLABS_TIMEOUT_S=10
+
+# ---- Speaker --------------------------------------------------------------
+# auto    = on QNX use AUDIO_PLAY_CMD below; on a laptop use its speaker
+# command = always use AUDIO_PLAY_CMD
+# sim     = play nothing, just print (for testing logic)
+AUDIO_PLAYER=auto
+
+# The command that plays one WAV file. {file} is replaced by the file path.
+# Documented by QNX for the Raspberry Pi 5 quick start image (USB audio):
+AUDIO_PLAY_CMD=mmrplay -a alsa:default {file}
+# Other things to TRY if that is silent (test each with test_voice.py speaker):
+#   AUDIO_PLAY_CMD=mmrplay -a alsa:USB {file}
+#   AUDIO_PLAY_CMD=wave {file}
+#   AUDIO_PLAY_CMD=aplay -f S16_LE -r {rate} {file}     (raw-PCM player)
+
+# Only if your USB speaker refuses some files: convert everything first.
+# e.g. PLAYBACK_SAMPLE_RATE=48000 and PLAYBACK_CHANNELS=2
+PLAYBACK_SAMPLE_RATE=
+PLAYBACK_CHANNELS=
+
+# Software volume for every sound (1.0 = unchanged). Prefer the speaker's knob.
+VOLUME_GAIN=1.0
+
+# Ignore the microphone while the cube talks, so it doesn't hear itself.
+MUTE_MIC_WHILE_SPEAKING=true
+MUTE_TAIL_S=0.4
+
+# ---- When the cube talks --------------------------------------------------
+VOICE_ENABLED=true
+# Modes in which yellow/red messages are spoken: kid, focus (comma-separated)
+VOICE_IN_MODES=kid,focus
+
+# Yellow fires once when stress climbs past YELLOW_AT, and can only fire
+# again after stress has dropped below YELLOW_RESET (room calm again)
+# AND the cooldown has passed.
+YELLOW_AT=40
+YELLOW_RESET=25
+YELLOW_COOLDOWN_S=90
+# A yellow message that can't start within this many seconds is dropped.
+YELLOW_MAX_WAIT_S=15
+
+# Red fires when the cube "turns red" (stress crosses 85), at most this often.
+RED_COOLDOWN_S=120
+
+# Spoken "Breathe in / Hold / Breathe out" during the breathing exercise.
+BREATHING_VOICE=true
+# Start each cue this much early, to hide the player's start-up delay.
+BREATHING_CUE_LEAD_S=0.15
+# Kid mode's automatic breathing waits until the parent's message has finished.
+AUTO_BREATHE_WAITS_FOR_VOICE=true
+
+# ---- Parent recording upload ----------------------------------------------
+# Formats accepted from the dashboard. WAV is the only one verified.
+# The /voice_upload page converts any phone recording to WAV, so it always works.
+# If `mmrplay yourfile.m4a` plays on the cube, you may add: wav,m4a,aac
+PARENT_UPLOAD_FORMATS=wav
+PARENT_MAX_SECONDS=60
+
+# Refuse uploads from outside the local network.
+UPLOAD_LAN_ONLY=true
+
+# Optional PIN for uploads (good idea on hackathon Wi-Fi shared with
+# hundreds of people). If set, upload with the /voice_upload page, which has
+# a PIN box - the dashboard's own upload button can't send a PIN.
+UPLOAD_PIN=

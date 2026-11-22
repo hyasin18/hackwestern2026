@@ -13,6 +13,12 @@ hardware (LEDs are drawn in the terminal) so you can develop in parallel.
   python3 calm_cube.py                     # run the cube (kid mode)
   python3 calm_cube.py --mode focus        # more sensitive, for studying
   python3 calm_cube.py --sim               # no mic/LEDs: type b / y / p / l
+  python3 calm_cube.py --test-speaker      # step 3: does the cube's speaker work?
+  python3 calm_cube.py --sim --audio-player sim   # no hardware AND no sound
+
+Voice (voice.py): the cube's own speaker says an AI tip when it turns
+yellow, plays the parent's recording when it turns red, and speaks the
+breathing steps. See README_VOICE_SETUP.md.
 """
 
 import argparse
@@ -191,7 +197,8 @@ class AudioSource(threading.Thread):
 class SimSource(threading.Thread):
     """Fake mic for laptops. Type a letter + Enter:
     b = table bang, y = 2 s of yelling, n = 3 s of loud talking,
-    p = short button press, l = long press (break alert), q = quit."""
+    p = short button press, l = long press (break alert), q = quit.
+    Voice testing: 1 = jump to yellow, 2 = jump to red, 0 = back to calm."""
 
     def __init__(self, out_q, button):
         super().__init__(daemon=True)
@@ -212,7 +219,9 @@ class SimSource(threading.Thread):
                     self.script += [(-12, -6)] * 100
                 elif k == "n":
                     self.script += [(-30, -22)] * 150
-            if k == "p":
+            if k in ("0", "1", "2"):
+                COMMANDS.put(("sim_stress", {"0": 0, "1": 50, "2": 90}[k]))
+            elif k == "p":
                 self.button.sim_press(0.2)
             elif k == "l":
                 self.button.sim_press(LONG_PRESS_S + 0.2)
@@ -485,6 +494,13 @@ try:
 except ImportError:
     gemini_tips = None
     print("gemini_tips.py not found - no calming tips")
+try:
+    import voice                # the cube's speaker: yellow / red / breathing
+    import parent_audio_upload  # safe upload of the parent's recording
+except ImportError as e:
+    voice = parent_audio_upload = None
+    print("Voice files not found (%s) - the cube stays silent" % e)
+VOICE = None                    # the VoiceSystem, created in run()
 
 
 def add_event(kind, text):
@@ -494,11 +510,21 @@ def add_event(kind, text):
     del STATE["events"][40:]
 
 
-def request_tip(why):
-    """Ask Gemini for a tip in the background so the lights never pause."""
+_tip_waiters = []              # voice.py waits here for the tip it will speak
+
+
+def request_tip(why, on_done=None):
+    """Ask Gemini for a tip in the background so the lights never pause.
+    on_done(tip, source) is called when the tip arrives (used by voice.py).
+    If a tip is already being fetched, on_done gets that one - so the cube
+    never sends two Gemini requests at once."""
     if gemini_tips is None:
+        if on_done:
+            on_done(None, "gemini_tips.py not found")
         return
     with STATE_LOCK:
+        if on_done:
+            _tip_waiters.append(on_done)
         if STATE["tip_loading"]:
             return
         STATE["tip_loading"] = True
@@ -516,6 +542,13 @@ def request_tip(why):
         with STATE_LOCK:
             STATE.update(tip=tip, tip_source=src, tip_time=time.time(),
                          tip_loading=False)
+            waiters = _tip_waiters[:]
+            del _tip_waiters[:]
+        for w in waiters:
+            try:
+                w(tip, src)
+            except Exception as e:
+                print("\nTip callback error: %s" % e)
     threading.Thread(target=work, daemon=True).start()
 
 PAGE = """<!doctype html><html><head><meta name=viewport
@@ -564,6 +597,11 @@ class Web(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path, _, qs = self.path.partition("?")
+        # Uploads go through the stricter checker first; voice_messages.py is
+        # only used directly if the voice files are missing.
+        if parent_audio_upload and parent_audio_upload.handle_post(
+                self, path, qs, VOICE.cfg if VOICE else None):
+            return
         if voice_messages and voice_messages.handle_post(self, path, qs):
             return
         self.send_response(404)
@@ -571,6 +609,11 @@ class Web(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path, _, qs = self.path.partition("?")
+        if parent_audio_upload and parent_audio_upload.handle_get(
+                self, path, qs, VOICE.cfg if VOICE else None):
+            return
+        if VOICE and VOICE.handle_get(self, path, qs):
+            return
         if voice_messages and voice_messages.handle_get(self, path, qs):
             return
         if reports and reports.handle_get(self, path, qs):
@@ -628,6 +671,37 @@ def breathe_brightness(t):
     return 0.08 + 0.92 * (0.5 - 0.5 * math.cos(math.pi * x))
 
 
+def breathe_phase(t):
+    """(cycle_number, "in" | "hold" | "out") at time t, using the same timing
+    as breathe_brightness(), so the spoken cues match the light exactly.
+    Returns None when the exercise is over."""
+    cycle = BREATHE_IN_S + BREATHE_HOLD_S + BREATHE_OUT_S
+    t = max(0.0, t)
+    if t >= cycle * BREATHE_CYCLES:
+        return None
+    n, t = divmod(t, cycle)
+    if t < BREATHE_IN_S:
+        return int(n), "in"
+    if t < BREATHE_IN_S + BREATHE_HOLD_S:
+        return int(n), "hold"
+    return int(n), "out"
+
+
+def start_voice(args):
+    """Creates the voice system (or leaves the cube silent if it can't)."""
+    global VOICE
+    if voice is None or args.no_voice:
+        print("Voice is off - the cube will stay silent.")
+        return
+    try:
+        VOICE = voice.VoiceSystem(
+            player_override=args.audio_player, request_tip=request_tip,
+            parent_path=voice_messages.parent_voice_path if voice_messages else None)
+    except Exception as e:
+        VOICE = None
+        print("Voice disabled because of an error: %s" % e)
+
+
 def run(args):
     use_gpio = HAVE_GPIO and not args.sim
     if not use_gpio:
@@ -640,7 +714,10 @@ def run(args):
     src = SimSource(frames, button) if args.sim else \
         AudioSource(frames, chunk_mode=args.chunk, cmd=args.audio_cmd)
     src.start()
+    start_voice(args)
     start_web()
+    cue_lead = VOICE.cfg.float("BREATHING_CUE_LEAD_S") if VOICE else 0.0
+    wait_for_voice = bool(VOICE and VOICE.cfg.bool("AUTO_BREATHE_WAITS_FOR_VOICE"))
 
     log = open(LOG_FILE, "a")
     if log.tell() == 0:
@@ -663,12 +740,17 @@ def run(args):
             if src.error:
                 raise SystemExit("\nAudio problem: %s\nTry --test-mic, "
                                  "--chunk, or --audio-cmd." % src.error)
-            # 1. Audio frames -> detector
+            # 1. Audio frames -> detector. While the cube's own speaker is
+            #    talking, frames are read but ignored, so the cube doesn't
+            #    hear itself and get "louder" (MUTE_MIC_WHILE_SPEAKING).
+            muted = bool(VOICE and not det.calibrating and VOICE.mic_muted())
             while True:
                 try:
-                    det.feed(*frames.get_nowait())
+                    frame = frames.get_nowait()
                 except queue.Empty:
                     break
+                if not muted:
+                    det.feed(*frame)
             events = [k for k, _ in det.pop_events()]
             for kind in events:
                 if kind == "bang" and det.cfg["flash"]:
@@ -691,14 +773,20 @@ def run(args):
                     with STATE_LOCK:
                         STATE["mode"] = val
                         add_event("mode", "Switched to %s mode" % val)
+                elif cmd == "sim_stress":           # --sim keys 0 / 1 / 2
+                    if not det.calibrating:
+                        det.stress = float(val)
                 else:
                     actions.append(cmd)
 
-            # 3. Auto-start breathing when stress stays high (kid mode)
+            # 3. Auto-start breathing when stress stays high (kid mode).
+            #    It waits until the parent's red message has finished, so the
+            #    breathing voice doesn't cut the parent off mid-sentence.
             if det.cfg["auto_breathe"] and det.stress >= AUTO_BREATHE_STRESS:
                 high_since = high_since or tick
                 if not breathe_t0 and tick - high_since > AUTO_BREATHE_HOLD_S:
-                    actions.append("auto_breathe")
+                    if not (wait_for_voice and VOICE.red_playing()):
+                        actions.append("auto_breathe")
             else:
                 high_since = None
 
@@ -711,6 +799,7 @@ def run(args):
 
             # 5. Update the shared numbers the dashboard shows
             want_tip = None
+            voice_calls = []
             with STATE_LOCK:
                 for kind in events:
                     STATE["bangs" if kind == "bang" else "yells"] += 1
@@ -727,8 +816,10 @@ def run(args):
                         add_event("breathe", "Breathing started" +
                                   (" automatically" if a == "auto_breathe"
                                    else ""))
+                        voice_calls.append("start")
                     elif a == "stop_breathe":
                         breathe_t0 = None
+                        voice_calls.append("stop")
                     elif a == "break" and not break_alert:
                         break_alert = tick
                         STATE["breaks"] += 1
@@ -754,6 +845,18 @@ def run(args):
             if want_tip:
                 request_tip(want_tip)
 
+            # 5b. Voice: breathing start/stop, then yellow/red decisions.
+            #     These only compare numbers; anything slow runs in threads.
+            if VOICE:
+                for c in voice_calls:
+                    if c == "start":
+                        VOICE.breathing_started()
+                    else:
+                        VOICE.breathing_stopped()
+                VOICE.update(tick, det.stress, turned_red, STATE["mode"],
+                             det.calibrating)
+                log_events += VOICE.pop_csv_events()
+
             # 6. Pick the target colour
             if det.calibrating:
                 target, fade = (40, 40, 40), 0.3
@@ -766,8 +869,13 @@ def run(args):
                     breathe_t0 = None
                     det.stress *= 0.5          # breathing helped
                     target, fade = (0, 0, 0), 0.5
+                    if VOICE:
+                        VOICE.breathing_stopped(finished=True)
                 else:
                     target, fade = [c * b for c in BREATHE_COLOR], 0.05
+                    if VOICE:                  # "Breathe in" / "Hold" / "Breathe out"
+                        VOICE.breathing_phase(
+                            breathe_phase(tick - breathe_t0 + cue_lead))
             elif tick < flash_until:
                 target, fade = (255, 255, 255), 0.0
             else:
@@ -787,7 +895,8 @@ def run(args):
                              zone=zone_of(det.stress),
                              calibrating=det.calibrating,
                              breathing=bool(breathe_t0),
-                             break_alert=break_alert)
+                             break_alert=break_alert,
+                             speaking=VOICE.speaking() if VOICE else None)
             status = ("calibrating..." if det.calibrating else
                       "level %5.1f dB  floor %5.1f  stress %3d  reds %d  %s%s" %
                       (det.level, det.floor, det.stress, STATE["reds"],
@@ -815,6 +924,9 @@ def run(args):
         pass
     finally:
         print()
+        if VOICE:
+            VOICE.audio.stop()                 # don't leave a sound playing
+            time.sleep(0.2)
         leds.off()
         log.close()
 
@@ -878,6 +990,12 @@ def main():
     ap.add_argument("--audio-cmd", help="override the recording command")
     ap.add_argument("--test-mic", action="store_true")
     ap.add_argument("--test-leds", action="store_true")
+    ap.add_argument("--test-speaker", action="store_true",
+                    help="play test sounds through the cube's speaker")
+    ap.add_argument("--audio-player", choices=["auto", "command", "sim"],
+                    help="how sound is played (default: AUDIO_PLAYER setting)")
+    ap.add_argument("--no-voice", action="store_true",
+                    help="keep the cube silent (old behaviour)")
     ap.add_argument("--quiet", action="store_true",
                     help="don't print status (when running in background)")
     args = ap.parse_args()
@@ -885,6 +1003,10 @@ def main():
         test_mic(args)
     elif args.test_leds:
         test_leds(args)
+    elif args.test_speaker:
+        import test_voice
+        test_voice.main(["speaker"] + (["--audio-player", args.audio_player]
+                                       if args.audio_player else []))
     else:
         run(args)
 

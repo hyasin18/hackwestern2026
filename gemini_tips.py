@@ -62,9 +62,25 @@ def _ssl_context():
 
 def _api_key():
     key = os.environ.get("GEMINI_API_KEY", "").strip()
+
+    if not key:
+        config_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "config.local"
+        )
+
+        if os.path.exists(config_path):
+            with open(config_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("GEMINI_API_KEY="):
+                        key = line.split("=", 1)[1].strip()
+                        break
+
     if not key and os.path.exists(KEY_FILE):
-        with open(KEY_FILE) as fh:
-            key = fh.read().strip()
+        with open(KEY_FILE, encoding="utf-8") as f:
+            key = f.read().strip()
+
     return key
 
 

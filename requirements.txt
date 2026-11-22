@@ -1,0 +1,9 @@
+# CoCube needs NO extra Python packages.
+#
+# Everything (including the ElevenLabs and Gemini calls) uses Python's
+# standard library, because the QNX quick start image ships Python 3
+# without pip.  There is nothing to install with pip.
+#
+# Optional, only on a Linux laptop, to re-make the placeholder voice files:
+#   sudo apt install espeak-ng mbrola mbrola-us1
+#   python3 make_default_audio.py --espeak

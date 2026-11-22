@@ -1,0 +1,15 @@
+# --- secrets: never commit these ---
+config.local
+.env
+
+# --- made on the cube ---
+generated_audio/*
+!generated_audio/.gitkeep
+audio/parent_voice.*
+audio/*.tmp
+calm_cube_log.csv
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.tmp
