@@ -40,6 +40,8 @@ We want to explore how accessible technology can help people communicate their n
 
 ### Run it
 
+Easiest: python start_cube.py on the laptop (one window: mic, speaker, and starts the cube on the Pi; Pi password qnxuser).
+
 ```
 # laptop (same Wi-Fi as the Pi)
 python laptop_mic.py 172.23.42.90
