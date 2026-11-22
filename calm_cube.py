@@ -51,6 +51,9 @@ PIN_BLUE = 22     # [pin 15]  (drives the YELLOW LED on our cube)
 THIRD_LED = "yellow"   # what's on PIN_BLUE: "blue" or "yellow"
                        # (with a yellow LED, colours are re-mixed from
                        #  red + green + yellow automatically)
+ONE_LIGHT = True       # only ONE LED on at a time: green -> yellow -> red
+GREEN_BELOW = 40       # stress under this = green (same as voice YELLOW_AT)
+RED_FROM = 85          # stress from this = red (same as "turned red")
 PIN_BUTTON = 23   # [pin 16]  other button leg -> GND [pin 14 or 20]
 
 COMMON_ANODE = False   # True if your RGB LED's long leg goes to 3.3V, not GND
@@ -71,9 +74,9 @@ FRAME_MS = 20          # loudness is measured every 20 ms (50x per second)
 
 # Per-mode behaviour. dB values are "above the room's normal noise level".
 MODES = {
-    # Soft colours, no flashes, slow fades. Auto-starts breathing when high.
+    # Soft, no flashes. Breathing only when the button is pressed.
     "kid": dict(loud_db=14, bang_db=20, yell_rate=18, bang_add=10,
-                decay=5, fade_s=1.5, flash=False, auto_breathe=True,
+                decay=5, fade_s=1.5, flash=False, auto_breathe=False,
                 palette=[(0, (0, 255, 0)), (40, (255, 255, 0)),
                          (70, (255, 130, 0)), (100, (255, 0, 0))]),
     # Nudges you sooner when the room gets noisy.
@@ -402,6 +405,12 @@ class Leds:
             top = max(out)
             k = max(r, g) / top if top else 0
             rgb = tuple(int(min(255, c * k)) for c in out)
+            if ONE_LIGHT:
+                # keep only the strongest LED, so two are never on together
+                i = max(range(3), key=lambda j: rgb[j])
+                rgb = tuple(rgb[j] if j == i else 0 for j in range(3))
+                v = rgb[i]
+                self.shown = [(v, 0, 0), (0, v, 0), (v, v, 0)][i]
         if self.use_gpio:
             if rgb == self.last:
                 return
@@ -441,6 +450,13 @@ class Leds:
 
 
 def palette_color(palette, x):
+    if ONE_LIGHT and THIRD_LED == "yellow":
+        # Traffic light: exactly one colour, no in-between mixes
+        if x >= RED_FROM:
+            return (255, 0, 0)
+        if x >= GREEN_BELOW:
+            return (255, 255, 0)
+        return (0, 255, 0)
     for (x0, c0), (x1, c1) in zip(palette, palette[1:]):
         if x <= x1:
             t = (x - x0) / float(x1 - x0) if x1 > x0 else 0
@@ -1021,7 +1037,9 @@ def test_leds(args):
     if THIRD_LED == "yellow":
         seq = [("RED", (255, 0, 0)), ("GREEN", (0, 255, 0)),
                ("YELLOW", (255, 255, 0)),
-               ("ORANGE (red + yellow)", (255, 120, 0)), ("OFF", (0, 0, 0))]
+               ("OFF", (0, 0, 0))]
+        if not ONE_LIGHT:
+            seq.insert(3, ("ORANGE (red + yellow)", (255, 120, 0)))
     else:
         seq = [("RED", (255, 0, 0)), ("GREEN", (0, 255, 0)),
                ("BLUE", (0, 0, 255)), ("WHITE", (255, 255, 255)),

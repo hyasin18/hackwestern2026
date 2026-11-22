@@ -101,6 +101,7 @@ class VoiceSystem:
             if stress < self.yellow_reset:
                 self.yellow_armed = True               # room was calm: yellow may fire again
             if turned_red:
+                self.yellow_armed = False              # no yellow tip while red
                 self._red(now, mode)
             elif self.yellow_armed and stress >= self.yellow_at:
                 self.yellow_armed = False
