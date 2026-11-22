@@ -641,7 +641,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("test", choices=list(TESTS) + ["all"])
-    ap.add_argument("--audio-player", choices=["auto", "command", "sim"])
+    ap.add_argument("--audio-player", choices=["auto", "command", "sim", "laptop"])
     ap.add_argument("--cycles", type=int, default=1, help="breathing cycles for Test 2")
     args = ap.parse_args(argv)
     names = AUTOMATIC if args.test == "all" else [args.test]

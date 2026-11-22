@@ -13,3 +13,6 @@ calm_cube_log.csv
 __pycache__/
 *.pyc
 *.tmp
+
+# --- secrets ---
+gemini_key.txt

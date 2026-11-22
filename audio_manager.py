@@ -232,6 +232,55 @@ class CommandPlayer:
         return "played", msg
 
 
+class LaptopPlayer:
+    """Plan B speaker: sends each WAV over Wi-Fi to laptop_speaker.py, which
+    plays it on the laptop (or a Bluetooth speaker paired to the laptop) and
+    answers "done" when it has finished, so timing/priorities still work."""
+
+    def __init__(self, host, port=9998):
+        self.host, self.port = host, port
+        self.name = "laptop"
+        self.description = "laptop_speaker.py on %s:%d" % (host, port)
+        self.is_real = True
+
+    def available(self):
+        return bool(self.host)
+
+    def play(self, path, seconds, stop_event, info):
+        import socket
+        import struct
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+            sock = socket.create_connection((self.host, self.port), timeout=3)
+        except Exception as e:
+            return "failed", "laptop speaker not reachable (%s) - is laptop_speaker.py running?" % e
+        try:
+            sock.sendall(struct.pack("!I", len(data)) + data)
+            sock.settimeout(0.05)
+            limit = time.time() + (seconds or MAX_UNKNOWN_LENGTH_S) + 5.0
+            while True:
+                if stop_event.is_set():
+                    return "interrupted", ""
+                try:
+                    r = sock.recv(64)
+                    if not r or r.startswith(b"done"):
+                        return "played", ""
+                    if r.startswith(b"err"):
+                        return "failed", r.decode(errors="replace")
+                except socket.timeout:
+                    pass
+                except OSError as e:
+                    return "failed", str(e)
+                if time.time() > limit:
+                    return "failed", "the laptop never said it finished"
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+
 def _stop_process(proc):
     try:
         proc.terminate()
@@ -248,6 +297,13 @@ def make_player(cfg, override=None):
     kind = (override or cfg.str("AUDIO_PLAYER")).lower()
     if kind == "sim":
         return SimPlayer()
+    if kind == "laptop":
+        host = cfg.str("LAPTOP_SPEAKER_IP")
+        if not host:
+            print("AUDIO_PLAYER=laptop but LAPTOP_SPEAKER_IP is empty - staying silent.")
+            return SimPlayer(reason="no LAPTOP_SPEAKER_IP")
+        print("Sound goes to laptop_speaker.py on %s" % host)
+        return LaptopPlayer(host)
     if kind == "command":
         p = CommandPlayer(cfg.str("AUDIO_PLAY_CMD"), "your AUDIO_PLAY_CMD setting")
         if not p.available():

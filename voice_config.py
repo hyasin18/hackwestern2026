@@ -23,7 +23,8 @@ DEFAULTS = {
     "ELEVENLABS_TIMEOUT_S": "10",
 
     # --- Speaker / playback ---
-    "AUDIO_PLAYER": "auto",          # auto | command | sim
+    "AUDIO_PLAYER": "auto",          # auto | command | sim | laptop
+    "LAPTOP_SPEAKER_IP": "",         # for AUDIO_PLAYER=laptop (laptop_speaker.py)
     "AUDIO_PLAY_CMD": "mmrplay -a alsa:default {file}",
     "PLAYBACK_SAMPLE_RATE": "",      # blank = play files as they are, e.g. 48000
     "PLAYBACK_CHANNELS": "",         # blank, 1 or 2

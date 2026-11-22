@@ -12,6 +12,7 @@ hardware (LEDs are drawn in the terminal) so you can develop in parallel.
   python3 calm_cube.py --test-leds         # step 2: are the LEDs wired right?
   python3 calm_cube.py                     # run the cube (kid mode)
   python3 calm_cube.py --mode focus        # more sensitive, for studying
+  python3 calm_cube.py --net               # mic levels from laptop_mic.py (QNX can't record USB mics)
   python3 calm_cube.py --sim               # no mic/LEDs: type b / y / p / l
   python3 calm_cube.py --test-speaker      # step 3: does the cube's speaker work?
   python3 calm_cube.py --sim --audio-player sim   # no hardware AND no sound
@@ -46,7 +47,10 @@ except ImportError:
 # GPIO pins (BCM numbering). Physical header pin in brackets.
 PIN_RED = 17      # [pin 11]
 PIN_GREEN = 27    # [pin 13]
-PIN_BLUE = 22     # [pin 15]
+PIN_BLUE = 22     # [pin 15]  (drives the YELLOW LED on our cube)
+THIRD_LED = "yellow"   # what's on PIN_BLUE: "blue" or "yellow"
+                       # (with a yellow LED, colours are re-mixed from
+                       #  red + green + yellow automatically)
 PIN_BUTTON = 23   # [pin 16]  other button leg -> GND [pin 14 or 20]
 
 COMMON_ANODE = False   # True if your RGB LED's long leg goes to 3.3V, not GND
@@ -70,19 +74,19 @@ MODES = {
     # Soft colours, no flashes, slow fades. Auto-starts breathing when high.
     "kid": dict(loud_db=14, bang_db=20, yell_rate=18, bang_add=10,
                 decay=5, fade_s=1.5, flash=False, auto_breathe=True,
-                palette=[(0, (0, 180, 120)), (40, (120, 200, 0)),
-                         (70, (255, 140, 0)), (100, (200, 40, 120))]),
+                palette=[(0, (0, 255, 0)), (40, (255, 255, 0)),
+                         (70, (255, 130, 0)), (100, (255, 0, 0))]),
     # Nudges you sooner when the room gets noisy.
     "focus": dict(loud_db=10, bang_db=18, yell_rate=12, bang_add=8,
                   decay=4, fade_s=1.0, flash=False, auto_breathe=False,
-                  palette=[(0, (0, 120, 255)), (50, (255, 180, 0)),
-                           (100, (255, 60, 0))]),
+                  palette=[(0, (0, 255, 0)), (50, (255, 255, 0)),
+                           (100, (255, 0, 0))]),
 }
 
 BREATHE_IN_S, BREATHE_HOLD_S, BREATHE_OUT_S = 4.0, 2.0, 6.0
 BREATHE_CYCLES = 5                     # 5 x 12 s = 1 minute
-BREATHE_COLOR = (40, 90, 255)
-BREAK_COLOR = (150, 60, 255)
+BREATHE_COLOR = (40, 90, 255) if THIRD_LED == "blue" else (0, 255, 0)
+BREAK_COLOR = (150, 60, 255) if THIRD_LED == "blue" else (255, 255, 0)
 LONG_PRESS_S = 2.0
 AUTO_BREATHE_STRESS, AUTO_BREATHE_HOLD_S = 80, 4.0
 
@@ -192,6 +196,38 @@ class AudioSource(threading.Thread):
                     raise RuntimeError("Chunk file is not a WAV file")
                 rate, ch, bits = parse_wav_header(fh.read)
                 self._emit_pcm(fh.read(), rate, ch, bits, b"")
+
+
+class NetSource(threading.Thread):
+    """The laptop measures the mic (laptop_mic.py) and sends "rms,peak"
+    numbers to the Pi over Wi-Fi (UDP port 9999). Used because QNX's USB
+    audio driver can't record from our USB mic."""
+
+    def __init__(self, out_q, port=9999):
+        super().__init__(daemon=True)
+        self.q, self.port = out_q, port
+        self.error = None
+        self.last = 0.0
+
+    def run(self):
+        import socket
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(("0.0.0.0", self.port))
+        except Exception as e:
+            self.error = e
+            return
+        print("Waiting for laptop_mic.py on UDP port %d..." % self.port)
+        while True:
+            data, _ = sock.recvfrom(256)
+            try:
+                for line in data.decode().split(";"):
+                    if line:
+                        rms, peak = line.split(",")
+                        self.q.put((float(rms), float(peak)))
+                self.last = time.time()
+            except ValueError:
+                pass
 
 
 class SimSource(threading.Thread):
@@ -325,10 +361,13 @@ except ImportError:
         HAVE_GPIO = False
 
 
+GAMMA = 1.6   # lower = brighter middle colours (2.2 = smoothest, dimmest)
+
+
 def gamma(v):
     """0-255 colour value -> 0-100 duty cycle, gamma-corrected so fades
     look smooth to the eye."""
-    return 100.0 * (max(0, min(255, v)) / 255.0) ** 2.2
+    return 100.0 * (max(0, min(255, v)) / 255.0) ** GAMMA
 
 
 class Leds:
@@ -352,6 +391,17 @@ class Leds:
 
     def set(self, rgb):
         rgb = tuple(int(max(0, min(255, c))) for c in rgb)
+        self.shown = rgb
+        if THIRD_LED == "yellow":
+            # Mix the wanted colour from red + green + yellow LEDs:
+            # the part where red and green overlap goes to the yellow LED,
+            # then scale up so it stays as bright as the colour asked for.
+            r, g, _ = rgb
+            y = min(r, g)
+            out = (r - y, g - y, y)
+            top = max(out)
+            k = max(r, g) / top if top else 0
+            rgb = tuple(int(min(255, c * k)) for c in out)
         if self.use_gpio:
             if rgb == self.last:
                 return
@@ -373,7 +423,7 @@ class Leds:
         if now - self.last_draw < 0.1:
             return
         self.last_draw = now
-        r, g, b = self.last or (0, 0, 0)
+        r, g, b = getattr(self, "shown", None) or (0, 0, 0)
         sys.stdout.write("\r\x1b[48;2;%d;%d;%dm%s\x1b[0m %s\x1b[K" %
                          (r, g, b, " " * 12, text))
         sys.stdout.flush()
@@ -711,8 +761,11 @@ def run(args):
     det = Detector(args.mode)
     STATE["mode"] = args.mode
     frames = queue.Queue()
-    src = SimSource(frames, button) if args.sim else \
-        AudioSource(frames, chunk_mode=args.chunk, cmd=args.audio_cmd)
+    if args.net:
+        src = NetSource(frames)
+    else:
+        src = SimSource(frames, button) if args.sim else \
+            AudioSource(frames, chunk_mode=args.chunk, cmd=args.audio_cmd)
     src.start()
     start_voice(args)
     start_web()
@@ -938,7 +991,8 @@ def run(args):
 
 def test_mic(args):
     frames = queue.Queue()
-    src = AudioSource(frames, chunk_mode=args.chunk, cmd=args.audio_cmd)
+    src = NetSource(frames) if args.net else \
+        AudioSource(frames, chunk_mode=args.chunk, cmd=args.audio_cmd)
     src.start()
     print("Talk, clap, bang the table. Ctrl+C to stop.\n")
     n = 0
@@ -964,9 +1018,14 @@ def test_mic(args):
 
 def test_leds(args):
     leds = Leds(HAVE_GPIO and not args.sim)
-    seq = [("RED", (255, 0, 0)), ("GREEN", (0, 255, 0)),
-           ("BLUE", (0, 0, 255)), ("WHITE", (255, 255, 255)),
-           ("OFF", (0, 0, 0))]
+    if THIRD_LED == "yellow":
+        seq = [("RED", (255, 0, 0)), ("GREEN", (0, 255, 0)),
+               ("YELLOW", (255, 255, 0)),
+               ("ORANGE (red + yellow)", (255, 120, 0)), ("OFF", (0, 0, 0))]
+    else:
+        seq = [("RED", (255, 0, 0)), ("GREEN", (0, 255, 0)),
+               ("BLUE", (0, 0, 255)), ("WHITE", (255, 255, 255)),
+               ("OFF", (0, 0, 0))]
     try:
         for name, c in seq:
             print("Should be %s" % name)
@@ -985,6 +1044,8 @@ def main():
     ap.add_argument("--mode", choices=list(MODES), default="kid")
     ap.add_argument("--sim", action="store_true",
                     help="no mic or LEDs; type commands instead")
+    ap.add_argument("--net", action="store_true",
+                    help="get mic levels from laptop_mic.py over Wi-Fi")
     ap.add_argument("--chunk", action="store_true",
                     help="record 1 s files instead of streaming")
     ap.add_argument("--audio-cmd", help="override the recording command")
@@ -992,13 +1053,18 @@ def main():
     ap.add_argument("--test-leds", action="store_true")
     ap.add_argument("--test-speaker", action="store_true",
                     help="play test sounds through the cube's speaker")
-    ap.add_argument("--audio-player", choices=["auto", "command", "sim"],
+    ap.add_argument("--speaker-laptop", metavar="LAPTOP_IP",
+                    help="play the cube's voice on the laptop (laptop_speaker.py)")
+    ap.add_argument("--audio-player", choices=["auto", "command", "sim", "laptop"],
                     help="how sound is played (default: AUDIO_PLAYER setting)")
     ap.add_argument("--no-voice", action="store_true",
                     help="keep the cube silent (old behaviour)")
     ap.add_argument("--quiet", action="store_true",
                     help="don't print status (when running in background)")
     args = ap.parse_args()
+    if args.speaker_laptop:
+        os.environ["LAPTOP_SPEAKER_IP"] = args.speaker_laptop
+        args.audio_player = "laptop"
     if args.test_mic:
         test_mic(args)
     elif args.test_leds:
